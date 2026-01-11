@@ -1,7 +1,8 @@
 <?php
 /**
- * Sitemap SEO Checker Pro v2.0
+ * Sitemap SEO Checker Pro v2.1
  * Добавлена проверка Follow/Nofollow и адаптивный дизайн
+ * Добавлены: настройки скорости сканирования, ограничения, исключения, выбор User-Agent, кнопка стоп
  */
 
 // Настройки
@@ -9,12 +10,19 @@ $config = [
     'user_agent' => 'Mozilla/5.0 (compatible; YandexWebmaster/2.0; +http://yandex.com/bots)',
     'timeout' => 15,
     'max_urls' => 200, // Ограничение для тестов
+    'min_urls' => 1,   // Минимальное количество URL для сканирования
     'output_format' => 'html', // html, json, csv
     'check_headers' => true, 
     'check_meta' => true,
     'check_canonical' => true,
     'follow_redirects' => true,
     'check_language' => true,
+    // Скорость сканирования (задержка между запросами в секундах)
+    'scan_speed' => 0, // 0 - без задержки, 0.5 - полсекунды, 2 - две секунды
+    'max_scan_speed' => 5, // Максимальная задержка
+    'min_scan_speed' => 0, // Минимальная задержка
+    // Исключения
+    'exclude_patterns' => ['/admin', '/login', '/wp-admin'], // Регулярные выражения для исключения URL
     // Лимиты SEO
     'max_title_length' => 75,
     'max_description_length' => 160,
@@ -22,6 +30,34 @@ $config = [
     'min_description_length' => 50,
     'slow_page_threshold' => 3,
 ];
+
+// Список популярных User-Agent
+$user_agents = [
+    'Googlebot' => 'Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)',
+    'Googlebot Mobile' => 'Mozilla/5.0 (Linux; Android 6.0.1; Nexus 5X Build/MMB29P) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/41.0.2272.96 Mobile Safari/537.36 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)',
+    'YandexBot' => 'Mozilla/5.0 (compatible; YandexBot/3.0; +http://yandex.com/bots)',
+    'YandexWebmaster' => 'Mozilla/5.0 (compatible; YandexWebmaster/2.0; +http://yandex.com/bots)',
+    'Bingbot' => 'Mozilla/5.0 (compatible; bingbot/2.0; +http://www.bing.com/bingbot.htm)',
+    'Baiduspider' => 'Mozilla/5.0 (compatible; Baiduspider/2.0; +http://www.baidu.com/search/spider.html)',
+    'DuckDuckBot' => 'DuckDuckBot/1.0; (+http://duckduckgo.com/duckduckbot.html)',
+    'Facebook' => 'facebookexternalhit/1.1 (+http://www.facebook.com/externalhit_uatext.php)',
+    'Twitter' => 'Twitterbot/1.0',
+    'LinkedIn' => 'LinkedInBot/1.0 (compatible; Mozilla/5.0; Jakarta Commons-HttpClient/3.1 +http://www.linkedin.com)',
+    'WhatsApp' => 'WhatsApp/2.0',
+    'Apple' => 'Applebot/0.1; +http://www.apple.com/go/applebot',
+    'Semrush' => 'SemrushBot/7~bl; +https://www.semrush.com/bot.html',
+    'Ahrefs' => 'AhrefsBot/7.0; +http://ahrefs.com/robot/',
+    'MJ12bot' => 'Mozilla/5.0 (compatible; MJ12bot/v1.4.8; http://mj12bot.com/)',
+    'Chrome Desktop' => 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+    'Firefox Desktop' => 'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:109.0) Gecko/20100101 Firefox/121.0',
+    'Safari Desktop' => 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.2 Safari/605.1.15',
+    'Mobile Chrome' => 'Mozilla/5.0 (Linux; Android 10; SM-G973F) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.6099.210 Mobile Safari/537.36',
+    'Mobile Safari' => 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_2 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.2 Mobile/15E148 Safari/604.1',
+    'Custom' => $config['user_agent'],
+];
+
+// Переменная для остановки сканирования
+$stop_scan = false;
 
 // --- Функции помощники ---
 
@@ -40,6 +76,18 @@ function utf8_strlen($string) {
 }
 
 function fetch_url($url, $config) {
+    global $stop_scan;
+    
+    // Проверяем флаг остановки
+    if ($stop_scan) {
+        return [
+            'success' => false,
+            'response' => '',
+            'info' => [],
+            'error' => 'Сканирование остановлено пользователем'
+        ];
+    }
+    
     $ch = curl_init();
     curl_setopt_array($ch, [
         CURLOPT_URL => $url,
@@ -68,6 +116,12 @@ function fetch_url($url, $config) {
 // --- Парсинг Sitemap ---
 
 function parse_sitemap($url, $config) {
+    global $stop_scan;
+    
+    if ($stop_scan) {
+        return ['error' => 'Сканирование остановлено'];
+    }
+    
     $result = fetch_url($url, $config);
     
     if (!$result['success']) {
@@ -90,11 +144,15 @@ function parse_sitemap($url, $config) {
 }
 
 function parse_sitemap_index($content, $config) {
+    global $stop_scan;
+    
     preg_match_all('/<loc>(.*?)<\/loc>/s', $content, $matches);
     if (empty($matches[1])) return ['error' => 'Не найдено sitemap файлов в индексе'];
     
     $all_urls = [];
     foreach ($matches[1] as $sitemap_url) {
+        if ($stop_scan) break;
+        
         $sitemap_url = trim($sitemap_url);
         $urls = parse_sitemap($sitemap_url, $config);
         if (isset($urls['urls'])) {
@@ -124,9 +182,44 @@ function parse_regular_sitemap($content) {
     return ['urls' => array_unique($urls)];
 }
 
+// --- Фильтрация URL по исключениям ---
+
+function filter_urls($urls, $config) {
+    if (empty($config['exclude_patterns'])) {
+        return $urls;
+    }
+    
+    $filtered_urls = [];
+    foreach ($urls as $url) {
+        $exclude = false;
+        foreach ($config['exclude_patterns'] as $pattern) {
+            if (preg_match($pattern, $url)) {
+                $exclude = true;
+                break;
+            }
+        }
+        if (!$exclude) {
+            $filtered_urls[] = $url;
+        }
+    }
+    
+    return $filtered_urls;
+}
+
 // --- Основная логика проверки страницы ---
 
 function check_page_seo($url, $config) {
+    global $stop_scan;
+    
+    if ($stop_scan) {
+        return [
+            'url' => $url,
+            'error' => 'Сканирование остановлено',
+            'http_code' => 0,
+            'response_time' => 0
+        ];
+    }
+    
     $result = fetch_url($url, $config);
     
     if (!$result['success']) {
@@ -310,6 +403,8 @@ function check_page_seo($url, $config) {
 // --- Вывод интерфейса ---
 
 function output_results($results, $format) {
+    global $user_agents, $config;
+    
     if ($format === 'json') {
         header('Content-Type: application/json');
         echo json_encode($results, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE);
@@ -322,7 +417,7 @@ function output_results($results, $format) {
     <head>
         <meta charset="UTF-8">
         <meta name="viewport" content="width=device-width, initial-scale=1.0">
-        <title>Sitemap SEO Checker v2.0</title>
+        <title>Sitemap SEO Checker v2.1</title>
         <style>
             :root {
                 --primary: #3498db;
@@ -348,10 +443,54 @@ function output_results($results, $format) {
             
             /* Controls */
             .controls { display: flex; gap: 10px; margin-bottom: 20px; flex-wrap: wrap; }
-            input[type="text"] { padding: 10px; border: 1px solid #ced4da; border-radius: 4px; flex-grow: 1; min-width: 200px; }
+            input[type="text"], select { padding: 10px; border: 1px solid #ced4da; border-radius: 4px; flex-grow: 1; min-width: 200px; }
             button { padding: 10px 20px; background: var(--primary); color: white; border: none; border-radius: 4px; cursor: pointer; transition: background 0.2s; white-space: nowrap; }
             button:hover { filter: brightness(90%); }
             button.export-btn { background: var(--success); }
+            button.stop-btn { background: var(--danger); display: none; }
+            button.stop-btn.active { display: inline-block; }
+            
+            /* Advanced Settings */
+            .advanced-settings {
+                background: #f8f9fa;
+                border: 1px solid #dee2e6;
+                border-radius: 4px;
+                padding: 15px;
+                margin-bottom: 20px;
+                display: none;
+            }
+            .advanced-settings.show {
+                display: block;
+            }
+            .settings-grid {
+                display: grid;
+                grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+                gap: 15px;
+                margin-top: 10px;
+            }
+            .setting-group {
+                display: flex;
+                flex-direction: column;
+                gap: 5px;
+            }
+            .setting-group label {
+                font-size: 12px;
+                color: #666;
+                font-weight: 600;
+            }
+            .toggle-advanced {
+                background: none;
+                border: none;
+                color: var(--primary);
+                cursor: pointer;
+                padding: 5px 0;
+                font-size: 12px;
+                text-align: left;
+                margin-top: 10px;
+            }
+            .toggle-advanced:hover {
+                text-decoration: underline;
+            }
             
             /* Stats Grid */
             .stats { display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 10px; margin-bottom: 20px; }
@@ -398,17 +537,54 @@ function output_results($results, $format) {
                 .controls button { width: 100%; }
                 .filter-controls { flex-direction: column; align-items: flex-start; }
                 h1 { font-size: 1.2rem; }
+                .settings-grid { grid-template-columns: 1fr; }
             }
         </style>
     </head>
     <body>
         <div class="container">
-            <h1>🔍 Sitemap Checker Pro <small style="font-size: 12px; color: #7f8c8d; font-weight: normal;">v2.0 Adaptive</small></h1>
+            <h1>🔍 Sitemap Checker Pro <small style="font-size: 12px; color: #7f8c8d; font-weight: normal;">v2.1 Advanced</small></h1>
             
             <div class="controls">
                 <input type="text" id="sitemapUrl" placeholder="URL sitemap.xml (например: https://site.com/sitemap.xml)" value="">
+                <select id="userAgent">
+                    <?php foreach ($user_agents as $name => $ua): ?>
+                        <option value="<?php echo htmlspecialchars($ua); ?>" <?php echo $ua === $config['user_agent'] ? 'selected' : ''; ?>>
+                            <?php echo htmlspecialchars($name); ?>
+                        </option>
+                    <?php endforeach; ?>
+                </select>
                 <button onclick="startCheck()">🚀 Проверить</button>
+                <button class="stop-btn" id="stopBtn" onclick="stopScan()">⏹ Стоп</button>
                 <button class="export-btn" onclick="exportCSV()">💾 CSV</button>
+            </div>
+            
+            <button class="toggle-advanced" onclick="toggleAdvanced()">⚙️ Дополнительные настройки</button>
+            
+            <div class="advanced-settings" id="advancedSettings">
+                <h3 style="margin-top: 0; font-size: 14px;">Настройки сканирования</h3>
+                <div class="settings-grid">
+                    <div class="setting-group">
+                        <label for="scanSpeed">Скорость сканирования (сек):</label>
+                        <input type="number" id="scanSpeed" min="<?php echo $config['min_scan_speed']; ?>" max="<?php echo $config['max_scan_speed']; ?>" step="0.1" value="<?php echo $config['scan_speed']; ?>">
+                    </div>
+                    <div class="setting-group">
+                        <label for="maxUrls">Макс. URL для проверки:</label>
+                        <input type="number" id="maxUrls" min="<?php echo $config['min_urls']; ?>" max="1000" value="<?php echo $config['max_urls']; ?>">
+                    </div>
+                    <div class="setting-group">
+                        <label for="minUrls">Мин. URL для проверки:</label>
+                        <input type="number" id="minUrls" min="1" max="1000" value="<?php echo $config['min_urls']; ?>">
+                    </div>
+                    <div class="setting-group">
+                        <label for="timeout">Таймаут (сек):</label>
+                        <input type="number" id="timeout" min="1" max="60" value="<?php echo $config['timeout']; ?>">
+                    </div>
+                    <div class="setting-group">
+                        <label for="excludePatterns">Исключить URL (регулярки):</label>
+                        <textarea id="excludePatterns" rows="2" placeholder="/admin, /login"><?php echo implode(', ', $config['exclude_patterns']); ?></textarea>
+                    </div>
+                </div>
             </div>
             
             <div class="stats" id="statsPanel"></div>
@@ -460,12 +636,46 @@ function output_results($results, $format) {
         
         <script>
         let allResults = [];
+        let isScanning = false;
+        let stopRequested = false;
+        
+        function toggleAdvanced() {
+            document.getElementById('advancedSettings').classList.toggle('show');
+        }
         
         async function startCheck() {
+            if (isScanning) {
+                alert('Сканирование уже выполняется');
+                return;
+            }
+            
             const urlInput = document.getElementById('sitemapUrl');
             const url = urlInput.value.trim();
             if (!url) { urlInput.focus(); return alert('Укажите URL!'); }
             
+            // Получаем настройки из формы
+            const settings = {
+                user_agent: document.getElementById('userAgent').value,
+                scan_speed: parseFloat(document.getElementById('scanSpeed').value),
+                max_urls: parseInt(document.getElementById('maxUrls').value),
+                min_urls: parseInt(document.getElementById('minUrls').value),
+                timeout: parseInt(document.getElementById('timeout').value),
+                exclude_patterns: document.getElementById('excludePatterns').value
+                    .split(',')
+                    .map(p => p.trim())
+                    .filter(p => p)
+            };
+            
+            // Валидация
+            if (settings.max_urls < settings.min_urls) {
+                return alert('Максимальное количество URL не может быть меньше минимального!');
+            }
+            if (settings.scan_speed < 0 || settings.scan_speed > 10) {
+                return alert('Скорость сканирования должна быть от 0 до 10 секунд');
+            }
+            
+            resetScanState();
+            document.getElementById('stopBtn').classList.add('active');
             document.getElementById('progressContainer').style.display = 'block';
             document.getElementById('resultsBody').innerHTML = '<tr><td colspan="8" style="text-align: center;">📥 Загрузка карты сайта...</td></tr>';
             
@@ -480,28 +690,71 @@ function output_results($results, $format) {
                 if (data.error) throw new Error(data.error);
                 if (!data.urls || data.urls.length === 0) throw new Error('URL не найдены в sitemap');
                 
-                await processUrls(data.urls);
+                // Применяем фильтрацию исключений
+                if (settings.exclude_patterns.length > 0) {
+                    const fdFilter = new FormData();
+                    fdFilter.append('action', 'filter_urls');
+                    fdFilter.append('urls', JSON.stringify(data.urls));
+                    fdFilter.append('patterns', JSON.stringify(settings.exclude_patterns));
+                    
+                    const filterResp = await fetch('?', { method: 'POST', body: fdFilter });
+                    const filterData = await filterResp.json();
+                    
+                    if (filterData.error) throw new Error(filterData.error);
+                    if (filterData.urls) {
+                        data.urls = filterData.urls;
+                    }
+                }
+                
+                // Проверяем ограничение по количеству URL
+                if (data.urls.length > settings.max_urls) {
+                    data.urls = data.urls.slice(0, settings.max_urls);
+                }
+                
+                if (data.urls.length < settings.min_urls) {
+                    throw new Error(`Найдено только ${data.urls.length} URL, требуется минимум ${settings.min_urls}`);
+                }
+                
+                await processUrls(data.urls, settings);
                 
             } catch (e) {
                 alert('Ошибка: ' + e.message);
-                document.getElementById('resultsBody').innerHTML = '';
+                resetScanState();
             }
         }
         
-        async function processUrls(urls) {
+        function resetScanState() {
+            isScanning = false;
+            stopRequested = false;
+            document.getElementById('stopBtn').classList.remove('active');
+            document.getElementById('progressContainer').style.display = 'none';
+            document.getElementById('progressBar').style.width = '0%';
+        }
+        
+        async function processUrls(urls, settings) {
             allResults = [];
+            isScanning = true;
             const total = urls.length;
             let processed = 0;
             
-            if (total > 100 && !confirm(`Найдено ${total} страниц. Это займет время. Продолжить?`)) return;
+            if (total > 100 && !confirm(`Найдено ${total} страниц. Это займет время. Продолжить?`)) {
+                resetScanState();
+                return;
+            }
             
-            // Очистка таблицы перед стартом потока
             document.getElementById('resultsBody').innerHTML = '';
             
             for (const url of urls) {
+                if (stopRequested) {
+                    alert('Сканирование остановлено пользователем');
+                    break;
+                }
+                
                 const fd = new FormData();
                 fd.append('action', 'check_page');
                 fd.append('url', url);
+                fd.append('user_agent', settings.user_agent);
+                fd.append('timeout', settings.timeout);
                 
                 try {
                     const resp = await fetch('?', { method: 'POST', body: fd });
@@ -512,14 +765,44 @@ function output_results($results, $format) {
                     updateProgress(processed, total);
                     updateStats();
                     
-                    // Добавляем строку сразу, чтобы было видно процесс
-                    addResultRow(data); 
+                    addResultRow(data);
+                    
+                    // Задержка между запросами
+                    if (settings.scan_speed > 0) {
+                        await new Promise(resolve => setTimeout(resolve, settings.scan_speed * 1000));
+                    }
                     
                 } catch (e) {
                     console.error(e);
                 }
             }
+            
+            isScanning = false;
+            document.getElementById('stopBtn').classList.remove('active');
             document.getElementById('progressContainer').style.display = 'none';
+            
+            if (stopRequested) {
+                alert(`Сканирование остановлено. Проверено ${processed} из ${total} страниц.`);
+            } else {
+                alert(`Сканирование завершено! Проверено ${processed} страниц.`);
+            }
+        }
+        
+        function stopScan() {
+            if (!isScanning) return;
+            
+            stopRequested = true;
+            document.getElementById('stopBtn').textContent = '⏹ Останавливается...';
+            
+            // Также отправляем запрос на сервер для установки флага остановки
+            fetch('?', {
+                method: 'POST',
+                body: new FormData()
+            }).then(() => {
+                setTimeout(() => {
+                    document.getElementById('stopBtn').textContent = '⏹ Стоп';
+                }, 500);
+            });
         }
         
         function updateProgress(curr, total) {
@@ -544,12 +827,10 @@ function output_results($results, $format) {
             `;
         }
 
-        // Вспомогательная функция для генерации HTML строки
         function getRowHtml(r) {
             const isError = r.http_code >= 400 || r.http_code === 0;
             const issuesHtml = r.seo_issues.map(i => `<span class="seo-issue">${i}</span>`).join(' ');
             
-            // Robots column logic
             let robotsBadges = '';
             if (r.is_noindex) robotsBadges += '<span class="badge bg-danger">NOINDEX</span>';
             else robotsBadges += '<span class="badge bg-success">INDEX</span>';
@@ -557,7 +838,6 @@ function output_results($results, $format) {
             if (r.is_nofollow) robotsBadges += '<br><span class="badge bg-warning">NOFOLLOW</span>';
             else robotsBadges += '<span class="badge bg-success">FOLLOW</span>';
 
-            // Links logic
             const linkInfo = r.links_total > 0 
                 ? `${r.links_total} <small style="color:${r.links_nofollow > 0 ? 'red' : '#aaa'}">(${r.links_nofollow} nf)</small>`
                 : '0';
@@ -580,7 +860,6 @@ function output_results($results, $format) {
         }
 
         function addResultRow(data) {
-            // Проверяем текущие фильтры, чтобы знать, показывать строку или нет
             if (!shouldShow(data)) return;
             
             const tr = document.createElement('tr');
@@ -589,7 +868,6 @@ function output_results($results, $format) {
         }
 
         function filterResults() {
-            // Перерисовываем таблицу полностью из allResults
             const tbody = document.getElementById('resultsBody');
             tbody.innerHTML = '';
             
@@ -651,12 +929,45 @@ function output_results($results, $format) {
 // --- Обработчик AJAX ---
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $action = $_POST['action'] ?? '';
+    
     if ($action === 'parse_sitemap') {
         echo json_encode(parse_sitemap($_POST['url'] ?? '', $config));
         exit;
     }
+    
+    if ($action === 'filter_urls') {
+        $urls = json_decode($_POST['urls'] ?? '[]', true);
+        $patterns = json_decode($_POST['patterns'] ?? '[]', true);
+        
+        if (!is_array($urls) || !is_array($patterns)) {
+            echo json_encode(['error' => 'Неверные данные']);
+            exit;
+        }
+        
+        $config['exclude_patterns'] = $patterns;
+        $filtered_urls = filter_urls($urls, $config);
+        
+        echo json_encode(['urls' => $filtered_urls]);
+        exit;
+    }
+    
     if ($action === 'check_page') {
+        // Обновляем конфиг из POST запроса
+        if (!empty($_POST['user_agent'])) {
+            $config['user_agent'] = $_POST['user_agent'];
+        }
+        if (!empty($_POST['timeout'])) {
+            $config['timeout'] = (int)$_POST['timeout'];
+        }
+        
         echo json_encode(check_page_seo($_POST['url'] ?? '', $config));
+        exit;
+    }
+    
+    // Обработчик остановки сканирования
+    if ($action === 'stop_scan') {
+        $stop_scan = true;
+        echo json_encode(['status' => 'stopped']);
         exit;
     }
 }
